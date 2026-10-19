@@ -170,7 +170,73 @@ arknights_dw/
 - [ ] 调度（DolphinScheduler 或 Airflow 串起来）
 - [ ] 示例查询集（BI 看板或 SQL 案例）
 
-**7 张表合计 5,905 行数据。**
+**7 张表合计 6,418 行数据。**
+
+---
+
+## 示例查询
+
+### 1. 跨三张表：各一级势力的六星人数与精英2平均攻击
+
+```sql
+WITH fac AS (
+  SELECT operator_name, faction_name FROM dim_faction
+  WHERE relation='所属' AND faction_level=1        -- 只取一级势力，避免和二级重复计数
+),
+six AS (SELECT operator_name FROM dim_operator WHERE star=6),
+attr AS (SELECT operator_name, atk FROM fact_operator_attr WHERE phase_id=4)
+SELECT fac.faction_name, COUNT(*), ROUND(AVG(attr.atk),1)
+FROM fac JOIN six ON fac.operator_name=six.operator_name
+         JOIN attr ON fac.operator_name=attr.operator_name
+GROUP BY fac.faction_name HAVING COUNT(*) >= 3
+ORDER BY COUNT(*) DESC;
+```
+
+实测结果（部分）：
+
+| 势力 | 六星人数 | 平均攻击 |
+|:---|---:|---:|
+| 罗德岛 | 26 | 661.8 |
+| 哥伦比亚 | 13 | 613.4 |
+| 炎 | 11 | 625.5 |
+| 维多利亚 | 11 | 583.0 |
+| 乌萨斯 | 4 | **1116.5** |
+| 巴别塔 | 4 | 941.0 |
+
+### 2. ⚠️ 一个必须知道的陷阱：join 多值维度会放大指标
+
+**这是数仓里最常见、也最不报错的一类 bug。**
+
+想算「罗德岛六星干员的模组加攻总和」：
+
+```sql
+-- 正确：只 join 必要的表
+WITH rop AS (SELECT DISTINCT operator_name FROM dim_faction
+             WHERE relation='所属' AND faction_name='罗德岛')
+SELECT COUNT(*), SUM(m.bonus_atk)
+FROM dim_module m
+JOIN rop ON m.operator_name = rop.operator_name
+JOIN dim_operator o ON m.operator_name = o.operator_name
+WHERE o.star=6 AND m.bonus_atk IS NOT NULL;
+-- 结果：43 条，加攻总和 2989
+```
+
+**如果再多 join 一个多值维度 `dim_tag`（看起来无害，只是想顺便带个标签）：**
+
+```sql
+... JOIN dim_tag t ON m.operator_name = t.operator_name
+-- 结果：93 条，加攻总和 6418   ← 行数和总量都被放大了 2.15 倍
+```
+
+**原因**：一个干员有多个标签，join 后每个模组行被复制了「标签数」次。
+`COUNT` 和 `SUM` 全部翻倍，而且**不报错、结果看着也像正常数字**。
+
+**规避办法**：一张事实表/多值维度，**不要在同一个查询里同时 join 多个 1:N 的多值维度**。
+需要多个维度的信息时，先分别聚合到干员粒度，再在干员粒度上 join。
+
+---
+
+## 已知限制
 
 ---
 
