@@ -1,0 +1,38 @@
+# ===== 能重新生成的东西，不进版本库 =====
+# spark-warehouse 是建表脚本跑出来的 parquet 数据。
+# 文件很小但它是"产物"，别人 clone 下来只要跑 01_create_tables.py 就能重建。
+# 提交产物会让仓库随数据量增长而膨胀，而且数据变了会污染 diff。
+spark-warehouse/
+
+# ===== 本机特有的东西，绝不进版本库 =====
+# metastore_db 是 Derby 数据库，里面是"表名→路径"的元数据目录，
+# 而且**记录了本机的绝对路径**。别人 clone 下来用它反而会报错。
+# 同样，别人应该用自己的脚本重新生成一份。
+metastore_db/
+derby.log
+
+# ===== 运行日志 =====
+*.log
+logs/
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ===== IDEA / VSCode =====
+.idea/
+.vscode/
+
+# ===== 系统文件 =====
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ===== 提交前可以自行核对：本项目的"真源码"只有这些 =====
+# sql/ddl.sql              建表语句（人写的）
+# scripts/*.py             跑批脚本（人写的）
+# README.md                项目说明
+# .gitignore               本文件
+# 其余全是可再生的产物
