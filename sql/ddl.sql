@@ -1,4 +1,18 @@
---- ==================== 维度表 ====================
+-- ==================== ODS 层 ====================
+-- 原则：原样落地，不做任何业务加工。
+-- 这里存的是 PRTS 页面的 wikitext 原文（约 8MB / 463 条）。
+-- 下游 DWD 层只从这张表读，不再碰任何文件，
+-- 这样数仓从 wiki 原始源码开始，不依赖别的项目的中间产物。
+
+CREATE TABLE IF NOT EXISTS ods_prts_wikitext (
+  operator_name  STRING NOT NULL COMMENT '干员名，同时也是 PRTS 页面标题',
+  wikitext       STRING         COMMENT '页面 wikitext 原文，未做任何加工（含换行，不截断）',
+  char_len       INT            COMMENT '字符数，用于校验入库无截断',
+  etl_date       STRING         COMMENT '抽取日期 yyyy-MM-dd',
+  source_url     STRING         COMMENT '来源 URL'
+) USING PARQUET;
+
+-- ==================== 维度表 ====================
 
 CREATE TABLE IF NOT EXISTS dim_operator (
   operator_name    STRING NOT NULL COMMENT '干员代号（PK）',

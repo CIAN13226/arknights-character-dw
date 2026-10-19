@@ -159,6 +159,7 @@ arknights_dw/
 
 - [x] 模型设计（7 张表，雪花结构）
 - [x] DDL 编写并实测（Spark 4.2 跑通，7/7）
+- [x] **ODS 层：`ods_prts_wikitext`（463 行，592 万字符原始 wiki 源码）**
 - [x] `dim_phase`（4 行）
 - [x] `dim_operator`（463 行）—— 解析 `operators.json` + `corpus_db` 属性段
 - [x] `dim_faction`（668 行）—— 所属 545 + 隐藏 123
@@ -166,11 +167,25 @@ arknights_dw/
 - [x] `fact_operator_attr`（1,796 行）—— 阶段分布 463/463/446/424
 - [x] `dim_module`（513 行）—— 模组加成拆成 8 个数值列
 - [x] `dim_potential`（2,155 行）—— 431 干员 × 5 潜能
+- [ ] **把 5 个 DWD 脚本改成只从 ODS 读**（当前仍直接读源文件，属于跨层）
+- [ ] DWS 汇总层（存 sum/cnt，不存平均）
+- [ ] ADS 应用层
 - [ ] 数据质量校验脚本（行数对账、主键唯一性、跨表一致性）
 - [ ] 调度（DolphinScheduler 或 Airflow 串起来）
-- [ ] 示例查询集（BI 看板或 SQL 案例）
 
-**7 张表合计 6,418 行数据。**
+**当前 8 张表合计 6,881 行数据。**
+
+### 分层现状（诚实说明）
+
+| 层 | 状态 |
+|:---|:---|
+| ODS | ✅ `ods_prts_wikitext`，463 行原始 wikitext |
+| DWD | ✅ 7 张表已建好，但**数据来自源文件，还没改成读 ODS** |
+| DWS | ❌ 未做 |
+| ADS | ❌ 未做 |
+
+**ODS→DWD 的通路已验证可行**（从 ODS 取 wikitext 跑解析，结果与现有 DWD 完全一致），
+下一步就是把 5 个加载脚本的数据来源换掉。
 
 ---
 
