@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS dim_operator (
   attack_interval  STRING         COMMENT '基础攻击间隔，形如 1.2s',
   redeploy         STRING         COMMENT '再部署时间，形如 70s',
   trust_hp         INT            COMMENT '信赖加成-生命',
+  trust_atk        INT            COMMENT '信赖加成-攻击',
   trust_def        INT            COMMENT '信赖加成-防御',
   level_cap_e0     INT            COMMENT '精英0 等级上限',
   level_cap_e1     INT            COMMENT '精英1 等级上限',
