@@ -159,13 +159,13 @@ arknights_dw/
 
 - [x] 模型设计（7 张表，雪花结构）
 - [x] DDL 编写并实测（Spark 4.2 跑通，7/7）
-- [x] `dim_phase` 灌数据（4 行）
-- [ ] `dim_operator`（463 行）—— 需解析 `operators.json` + `corpus_db` 属性段
-- [ ] `dim_faction`（661 行）
+- [x] `dim_phase`（4 行）
+- [x] `dim_operator`（463 行）—— 解析 `operators.json` + `corpus_db` 属性段
+- [x] `dim_faction`（668 行）—— 所属 545 + 隐藏 123
+- [x] `dim_tag`（819 行）
+- [x] `fact_operator_attr`（1,796 行）—— 阶段分布 463/463/446/424
 - [ ] `dim_module`（513 行）—— 需从 `atk:70;def:100;block_cnt:1` 拆成数值列
-- [ ] `dim_tag`（819 行）
 - [ ] `dim_potential`（约 2,300 行）—— 需解析潜能的双数组结构
-- [ ] `fact_operator_attr`（1,796 行）—— 需解析属性段的四个阶段行
 - [ ] 调度（DolphinScheduler 或 Airflow 串起来）
 - [ ] 数据质量校验（行数对账、主键唯一性）
 
