@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS dim_module (
   bonus_res          INT,
   bonus_block        INT,
   bonus_attack_speed INT            COMMENT '攻速加成 S',
-  bonus_interval     INT            COMMENT '攻击间隔改动'
+  bonus_cost         INT            COMMENT '部署费用加成',
+  bonus_respawn_time INT            COMMENT '再部署时间加成'
 ) USING PARQUET;
 
 CREATE TABLE IF NOT EXISTS dim_tag (
