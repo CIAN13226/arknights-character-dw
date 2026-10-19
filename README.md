@@ -142,16 +142,41 @@ python scripts\01_create_tables.py
 ```text
 arknights_dw/
 ├── sql/
-│   └── ddl.sql                 7 张表的建表语句
+│   └── ddl.sql                      8 张表的建表语句（ODS + 7 张 DWD）
 ├── scripts/
-│   └── 01_create_tables.py     建库 + 建表 + 灌 dim_phase
-├── spark-warehouse/            表数据（parquet，不提交）
-├── metastore_db/               Derby 元数据（不提交）
-├── derby.log                   不提交
+│   ├── 00_fetch_wikitext_to_ods.py  抓 PRTS wikitext -> ODS（支持断点续跑）
+│   ├── 01_create_tables.py          建库 + 建表 + 灌 dim_phase
+│   ├── 02_build_dwd_from_ods.py     从 ODS 重建全部 6 张 DWD 表
+│   └── dw_parse.py                  DWD 层解析模块，输入 wikitext 输出各表结构
+├── spark-warehouse/                 表数据（parquet，不提交）
+├── metastore_db/                    Derby 元数据（不提交）
+├── derby.log                        不提交
 └── .gitignore
 ```
 
 **仓库里只有手写的文件**：DDL、脚本、README。所有数据都能用脚本重建。
+
+### 数据流
+
+```text
+PRTS wiki
+   │  00_fetch_wikitext_to_ods.py（抓取，带重试与断点续跑）
+   ▼
+ODS  ods_prts_wikitext                 463 行原始 wikitext，不做任何加工
+   │  02_build_dwd_from_ods.py（调 dw_parse 解析）
+   ▼
+DWD  dim_operator / dim_faction / dim_tag / dim_module
+     dim_potential / fact_operator_attr / dim_phase
+   │
+   ▼
+DWS  汇总层（未做）
+   │
+   ▼
+ADS  应用层（未做）
+```
+
+**关键：DWD 只从 ODS 读**，不碰 `operators.json` 也不碰 `corpus_db`。
+数仓从 wiki 原始源码开始，不依赖任何上游项目的中间产物。
 
 ---
 
@@ -161,13 +186,13 @@ arknights_dw/
 - [x] DDL 编写并实测（Spark 4.2 跑通，7/7）
 - [x] **ODS 层：`ods_prts_wikitext`（463 行，592 万字符原始 wiki 源码）**
 - [x] `dim_phase`（4 行）
-- [x] `dim_operator`（463 行）—— 解析 `operators.json` + `corpus_db` 属性段
+- [x] **DWD 层全部改为只从 ODS 读**（6 张表行数与改造前完全一致）
+- [x] `dim_operator`（463 行）
 - [x] `dim_faction`（668 行）—— 所属 545 + 隐藏 123
 - [x] `dim_tag`（819 行）
 - [x] `fact_operator_attr`（1,796 行）—— 阶段分布 463/463/446/424
 - [x] `dim_module`（513 行）—— 模组加成拆成 8 个数值列
 - [x] `dim_potential`（2,155 行）—— 431 干员 × 5 潜能
-- [ ] **把 5 个 DWD 脚本改成只从 ODS 读**（当前仍直接读源文件，属于跨层）
 - [ ] DWS 汇总层（存 sum/cnt，不存平均）
 - [ ] ADS 应用层
 - [ ] 数据质量校验脚本（行数对账、主键唯一性、跨表一致性）
@@ -180,12 +205,15 @@ arknights_dw/
 | 层 | 状态 |
 |:---|:---|
 | ODS | ✅ `ods_prts_wikitext`，463 行原始 wikitext |
-| DWD | ✅ 7 张表已建好，但**数据来自源文件，还没改成读 ODS** |
+| DWD | ✅ 7 张表，**只从 ODS 读**，行数与改造前完全一致 |
 | DWS | ❌ 未做 |
 | ADS | ❌ 未做 |
 
-**ODS→DWD 的通路已验证可行**（从 ODS 取 wikitext 跑解析，结果与现有 DWD 完全一致），
-下一步就是把 5 个加载脚本的数据来源换掉。
+**DWD 改造时的一次真实排查**：切到从 ODS 读之后，`dim_faction` 从 668 掉到 661，
+正好差 7 条。定位到 `parse_faction()` 处理隐藏势力时只按分号切，
+而这 7 个干员的隐藏势力是逗号写成层级的（如 `谢拉格,喀兰贸易`）。
+修在上游解析函数里之后恢复 668，改动同时回灌了 RAG 项目。
+**这类"少 7 条不报错"的问题，靠的就是入库前的行数基准对账。**
 
 ---
 
@@ -248,10 +276,6 @@ WHERE o.star=6 AND m.bonus_atk IS NOT NULL;
 
 **规避办法**：一张事实表/多值维度，**不要在同一个查询里同时 join 多个 1:N 的多值维度**。
 需要多个维度的信息时，先分别聚合到干员粒度，再在干员粒度上 join。
-
----
-
-## 已知限制
 
 ---
 
