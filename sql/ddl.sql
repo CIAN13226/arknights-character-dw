@@ -88,3 +88,84 @@ CREATE TABLE IF NOT EXISTS fact_operator_attr (
   block          INT            COMMENT '阻挡数',
   cost           INT            COMMENT '部署费用'
 ) USING PARQUET;
+
+-- ==================== DWS 层 ====================
+-- 铁律：只存「可加度量」（sum / count），**不存平均值、不存比率**。
+--
+-- 为什么：平均值不可再聚合。
+--   假设 DWS 里按星级存了平均攻击：五星 600、六星 700。
+--   想算整体的平均攻击，写成 (600+700)/2 = 650 是错的。
+--   正确值是加权平均：如果五星 300 人、六星 26 人，
+--   应该是 (600*300 + 700*26) / 326。
+--   除非同时知道每组的人数，否则无法还原。
+-- 所以这里存 atk_sum + atk_cnt，平均 = SUM(atk_sum)/SUM(atk_cnt)，任意层级都算得对。
+--
+-- 另一个必须知道的点：势力是多值维度（一个干员可属多个势力），
+-- 所以「跨势力求和」会重复计数（同一干员在多个势力里各算一次）。
+-- 这是多值维度的固有特性，看汇总数字时要注意口径。
+
+CREATE TABLE IF NOT EXISTS dws_faction_star (
+  faction_name   STRING NOT NULL COMMENT '一级势力名（来自 dim_faction 层级1）',
+  star           INT    NOT NULL COMMENT '星级',
+  phase_id       INT    NOT NULL COMMENT '精英阶段档位（来自 dim_phase）',
+  operator_cnt   INT            COMMENT '该组合下干员数（去重）',
+  atk_sum        INT            COMMENT '攻击合计',
+  atk_cnt        INT            COMMENT '攻击非空计数（算平均的分母）',
+  hp_sum         INT            COMMENT '生命合计',
+  hp_cnt         INT            COMMENT '生命非空计数',
+  cost_sum       INT            COMMENT '部署费用合计',
+  cost_cnt       INT            COMMENT '费用非空计数'
+) USING PARQUET;
+
+CREATE TABLE IF NOT EXISTS dws_profession_branch (
+  profession     STRING NOT NULL COMMENT '职业',
+  branch         STRING NOT NULL COMMENT '分支',
+  phase_id       INT    NOT NULL COMMENT '精英阶段档位',
+  operator_cnt   INT            COMMENT '该组合下干员数',
+  atk_sum        INT,
+  atk_cnt        INT,
+  hp_sum         INT,
+  hp_cnt         INT,
+  def_sum        INT,
+  def_cnt        INT,
+  cost_sum       INT,
+  cost_cnt       INT
+) USING PARQUET;
+
+CREATE TABLE IF NOT EXISTS dws_tag (
+  tag            STRING NOT NULL COMMENT '标签',
+  operator_cnt   INT            COMMENT '带该标签的干员数',
+  six_star_cnt   INT            COMMENT '其中六星人数',
+  star_sum       INT            COMMENT '星级合计',
+  star_cnt       INT            COMMENT '星级非空计数'
+) USING PARQUET;
+
+CREATE TABLE IF NOT EXISTS dws_module_effect (
+  profession          STRING NOT NULL COMMENT '职业',
+  module_cnt          INT            COMMENT '模组条数',
+  operator_cnt        INT            COMMENT '有模组的干员数',
+  bonus_atk_sum       INT            COMMENT '模组加攻合计',
+  bonus_atk_cnt       INT            COMMENT '有加攻的模组条数',
+  bonus_hp_sum        INT,
+  bonus_hp_cnt        INT,
+  bonus_def_sum       INT,
+  bonus_def_cnt       INT,
+  bonus_attack_speed_sum INT,
+  bonus_attack_speed_cnt INT
+) USING PARQUET;
+
+-- 数据完整度：给数据治理用的，不是业务指标。
+-- 一行一个干员，记录 dim_operator 的 12 个描述字段里缺了几个，
+-- 以及几个关键的多值维度有没有数据。
+CREATE TABLE IF NOT EXISTS dws_operator_completeness (
+  operator_name   STRING NOT NULL,
+  star            INT,
+  profession      STRING,
+  missing_cnt     INT            COMMENT '12 个描述字段中缺失的个数',
+  total_cnt       INT            COMMENT '参与检查的字段总数',
+  has_faction     INT            COMMENT '1=有, 0=无',
+  has_tag         INT,
+  has_module      INT,
+  has_potential   INT,
+  has_trust       INT            COMMENT '是否有信赖加成（三项任一非0）'
+) USING PARQUET;

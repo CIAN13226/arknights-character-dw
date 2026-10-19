@@ -147,6 +147,7 @@ arknights_dw/
 │   ├── 00_fetch_wikitext_to_ods.py  抓 PRTS wikitext -> ODS（支持断点续跑）
 │   ├── 01_create_tables.py          建库 + 建表 + 灌 dim_phase
 │   ├── 02_build_dwd_from_ods.py     从 ODS 重建全部 6 张 DWD 表
+│   ├── 03_build_dws.py              从 DWD 建 5 张 DWS 汇总表
 │   └── dw_parse.py                  DWD 层解析模块，输入 wikitext 输出各表结构
 ├── spark-warehouse/                 表数据（parquet，不提交）
 ├── metastore_db/                    Derby 元数据（不提交）
@@ -167,16 +168,17 @@ ODS  ods_prts_wikitext                 463 行原始 wikitext，不做任何加�
    ▼
 DWD  dim_operator / dim_faction / dim_tag / dim_module
      dim_potential / fact_operator_attr / dim_phase
-   │
+   │  03_build_dws.py（只做聚合，只存 sum/cnt）
    ▼
-DWS  汇总层（未做）
+DWS  dws_faction_star / dws_profession_branch / dws_tag
+     dws_module_effect / dws_operator_completeness
    │
    ▼
 ADS  应用层（未做）
 ```
 
-**关键：DWD 只从 ODS 读**，不碰 `operators.json` 也不碰 `corpus_db`。
-数仓从 wiki 原始源码开始，不依赖任何上游项目的中间产物。
+**关键：每层只读上一层。** DWD 不碰 `operators.json` / `corpus_db`，
+DWS 不碰 ODS 和源文件。数仓从 wiki 原始源码开始，不依赖任何上游项目的中间产物。
 
 ---
 
@@ -193,12 +195,66 @@ ADS  应用层（未做）
 - [x] `fact_operator_attr`（1,796 行）—— 阶段分布 463/463/446/424
 - [x] `dim_module`（513 行）—— 模组加成拆成 8 个数值列
 - [x] `dim_potential`（2,155 行）—— 431 干员 × 5 潜能
-- [ ] DWS 汇总层（存 sum/cnt，不存平均）
+- [x] **DWS 汇总层 5 张表（只存 sum/cnt，不存平均）**
 - [ ] ADS 应用层
 - [ ] 数据质量校验脚本（行数对账、主键唯一性、跨表一致性）
 - [ ] 调度（DolphinScheduler 或 Airflow 串起来）
 
-**当前 8 张表合计 6,881 行数据。**
+**当前 13 张表：ODS 463 + DWD 6,418 + DWS 1,060 = 7,941 行。**
+
+### DWS 层：为什么只存 sum/cnt，不存平均
+
+**核心原则：平均值不可再聚合。**
+
+假设 DWS 里按星级存了平均攻击：五星 600、六星 700。
+想算「整体平均攻击」，写成 `(600+700)/2 = 650` 是**错的**。
+正确值是加权平均——如果五星 300 人、六星 26 人，应该是
+`(600×300 + 700×26) / 326`。**除非同时知道每组的人数，否则还原不回来。**
+
+所以表里存 `atk_sum` + `atk_cnt`，平均用 `SUM(atk_sum) / SUM(atk_cnt)` 现算，
+**任意层级都算得对**。
+
+实测验证：用 DWS 现算的各职业精英2平均攻击，与直接从 DWD 算的结果**完全一致**
+（狙击 765.8 / 近卫 755.9 / 术师 721.3 …）。
+
+### 汇总表对账的两个坑
+
+**① 不能拿全表求和去和明细表比 —— 口径不同**
+
+`dws_faction_star` 只覆盖「有一级势力」的干员（434 / 463），
+且势力是多值维度（一个干员可属多个势力，会在每处各计一次）。
+
+**正确做法是同口径对账**：挑一个具体势力，把它在 DWS 的合计
+和「从 DWD 按同样筛选条件算出来的合计」比。
+
+实测（罗德岛）：DWS 攻击合计 = **133,790**，DWD 同口径 = **133,790** ✅
+
+**② 单值维度可以严格对账，多值维度不行**
+
+`profession` 是单值，一干员一职业，join 不放大，所以能整表对账：
+
+| | DWS | DWD |
+|:---|---:|---:|
+| 人数合计 | 1,796 | 1,796 ✅ |
+| 攻击合计 | 809,984 | 809,984 ✅ |
+
+### 数据完整度（`dws_operator_completeness`）
+
+这张不算业务指标，是**数据治理**用的：一行一个干员，记录 `dim_operator` 的
+12 个描述字段缺了几个，以及各多值维度有没有数据。
+
+实测：
+
+| 项 | 值 |
+|:---|---:|
+| 缺失字段总数 | 220 |
+| 有缺失的干员 | 60 / 463 |
+| 有势力 / 有标签 | 434 / 463 |
+| 有模组 / 有潜能 / 有信赖 | 398 / 431 / 452 |
+
+**缺失最多的是那几个 1 星机器人**（CONFESS-47、Castle-3、Lancet-2…），
+各缺 6 个字段——它们本来就没有种族/出身地/生日这类人设信息。
+**这符合预期，不是数据错误。**
 
 ### 分层现状（诚实说明）
 
@@ -206,7 +262,7 @@ ADS  应用层（未做）
 |:---|:---|
 | ODS | ✅ `ods_prts_wikitext`，463 行原始 wikitext |
 | DWD | ✅ 7 张表，**只从 ODS 读**，行数与改造前完全一致 |
-| DWS | ❌ 未做 |
+| DWS | ✅ 5 张汇总表，只存 sum/cnt |
 | ADS | ❌ 未做 |
 
 **DWD 改造时的一次真实排查**：切到从 ODS 读之后，`dim_faction` 从 668 掉到 661，
