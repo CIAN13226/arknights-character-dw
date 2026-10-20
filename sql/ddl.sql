@@ -169,3 +169,42 @@ CREATE TABLE IF NOT EXISTS dws_operator_completeness (
   has_potential   INT,
   has_trust       INT            COMMENT '是否有信赖加成（三项任一非0）'
 ) USING PARQUET;
+-- ==================== ADS 层 ====================
+-- 和 DWS 最关键的区别：**ADS 可以存平均值和排名**。
+--
+-- 为什么 DWS 不能存平均、ADS 却能：
+--   DWS 的下游还要再聚合（可能按势力汇总、可能跨星级汇总），
+--   平均值一旦存死就无法还原；而 ADS 是链路的终点，
+--   它直接喂报表/看板/接口，没有下游再算一次，所以存成品值是对的。
+--   换句话说：**不可加度量只能在"最后一层"出现。**
+--
+-- ADS 只从 DWS 读，不再回 DWD 取数。
+
+-- 势力排行榜：给看板用的成品表（精英2满级口径）
+CREATE TABLE IF NOT EXISTS ads_faction_rank (
+  faction_name    STRING NOT NULL COMMENT '一级势力',
+  rank_no         INT            COMMENT '按人数排名（1 起）',
+  operator_cnt    INT            COMMENT '干员数',
+  six_star_cnt    INT            COMMENT '六星人数',
+  avg_atk         DOUBLE         COMMENT '平均攻击（成品值）',
+  avg_hp          DOUBLE         COMMENT '平均生命',
+  avg_cost        DOUBLE         COMMENT '平均部署费用'
+) USING PARQUET;
+
+-- 职业画像：给看板的成品表（精英2满级口径）
+CREATE TABLE IF NOT EXISTS ads_profession_profile (
+  profession      STRING NOT NULL COMMENT '职业',
+  operator_cnt    INT            COMMENT '干员数',
+  branch_cnt      INT            COMMENT '下设分支数',
+  avg_atk         DOUBLE,
+  avg_hp          DOUBLE,
+  avg_def         DOUBLE,
+  avg_cost        DOUBLE
+) USING PARQUET;
+
+-- 数据质量总览：给监控看板的单表宽指标（长表结构，便于前端直接渲染）
+CREATE TABLE IF NOT EXISTS ads_data_quality_summary (
+  metric_name     STRING NOT NULL COMMENT '指标名',
+  metric_value    DOUBLE         COMMENT '指标值',
+  metric_note     STRING         COMMENT '口径说明'
+) USING PARQUET;
