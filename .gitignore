@@ -2,6 +2,8 @@
 # spark-warehouse 是建表脚本跑出来的 parquet 数据。
 # 文件很小但它是"产物"，别人 clone 下来只要跑 01_create_tables.py 就能重建。
 # 提交产物会让仓库随数据量增长而膨胀，而且数据变了会污染 diff。
+_runs/
+
 _tmp/
 
 spark-warehouse/

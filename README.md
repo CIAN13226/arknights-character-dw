@@ -170,6 +170,7 @@ arknights_dw/
 ├── sql/
 │   └── ddl.sql                      16 张表的建表语句（ODS/DWD/DWS/ADS 四层）
 ├── scripts/
+│   ├── run_pipeline.py              DAG 执行器（调度入口）
 │   ├── 00_fetch_wikitext_to_ods.py  抓 PRTS wikitext -> ODS（支持断点续跑）
 │   ├── 01_create_tables.py          建库 + 建表 + 灌 dim_phase
 │   ├── 02_build_dwd_from_ods.py     从 ODS 重建全部 6 张 DWD 表
@@ -177,19 +178,28 @@ arknights_dw/
 │   ├── 04_build_ads.py              从 DWS 建 3 张 ADS 应用表
 │   ├── 05_quality_check.py          数据质量校验（45 项，失败则退出码 1）
 │   └── dw_parse.py                  DWD 层解析模块，输入 wikitext 输出各表结构
+├── _runs/                           每次运行的日志与 summary.json（不提交）
 ├── spark-warehouse/                 表数据（parquet，不提交）
 ├── metastore_db/                    Derby 元数据（不提交）
 ├── derby.log                        不提交
 └── .gitignore
 ```
 
-**仓库里只有手写的文件**：DDL、6 个脚本、README。所有数据都能用脚本重建。
+**仓库里只有手写的文件**：DDL、7 个脚本、README。所有数据都能用脚本重建。
+
+**一条命令跑完整条流水线**：
+
+```powershell
+python scripts\run_pipeline.py
+```
 
 ### 数据流
 
 ```text
 PRTS wiki
-   │  00_fetch_wikitext_to_ods.py（抓取，带重试与断点续跑）
+   │  run_pipeline.py 按 DAG 依次驱动下面 5 步，任一步失败即中止
+   ▼
+   00_fetch_wikitext_to_ods.py（抓取，带重试与断点续跑）
    ▼
 ODS  ods_prts_wikitext                 463 行原始 wikitext，不做任何加工
    │  02_build_dwd_from_ods.py（调 dw_parse 解析）
@@ -213,6 +223,72 @@ DWS 不碰 ODS，ADS 不碰 DWD。数仓从 wiki 原始源码开始，不依赖�
 
 ---
 
+## 调度：轻量 DAG 执行器
+
+`scripts/run_pipeline.py` 把 6 个脚本串成一条有依赖的流水线。
+
+### 为什么不用 Airflow
+
+Airflow 官方不支持 Windows（要 WSL 或 Docker），本机两者都没有；
+DolphinScheduler 需要 ZooKeeper + 元数据库 + 中心节点，单机练习过重。
+所以这里实现一个最小可用的 DAG 执行器，把调度器真正在做的几件事都做出来：
+
+| 调度器能力 | 本项目的实现 |
+|:---|:---|
+| 声明式任务定义 | `Task(id, script, deps, timeout, retries)` |
+| 按依赖顺序执行 | 拓扑排序（同层按定义顺序，保证可重复） |
+| **环检测** | DFS 三色标记，`A → B → A` 直接报错，不许提交 |
+| **失败传播** | 上游没成功，下游全部 `SKIPPED`（等价 Airflow 的 `trigger_rule='all_success'`） |
+| 任务级重试 | `retries` 字段；抓取任务配 1 次重试 |
+| 超时控制 | `timeout` 字段，超时终止并判失败 |
+| 运行留痕 | 每次运行独立目录 `_runs/<时间戳>/`，逐任务日志 + `summary.json` |
+| 退出码 | 有失败则 1，可再接一层或挂 CI |
+
+### DAG 结构
+
+```text
+create_tables → fetch_ods → build_dwd → build_dws → build_ads → quality_check
+```
+
+依赖是真实约束，不是排着好看：
+
+- `create_tables` 建库，而 `00` 脚本开头要 `USE arknights_dw`，所以必须排最前
+- `quality_check` 用退出码 1 表示失败，**因此它天然就是整条流水线的质量门禁**
+
+### 用法
+
+```powershell
+python scripts\run_pipeline.py --list                # 看任务与依赖
+python scripts\run_pipeline.py --dry-run             # 只看计划，不真跑
+python scripts\run_pipeline.py                       # 全量（含抓取，约 15 分钟）
+python scripts\run_pipeline.py --from build_dwd      # 从某步开始（上游视为已完成）
+python scripts\run_pipeline.py --only quality_check  # 只跑一步
+python scripts\run_pipeline.py --self-test           # 自测拓扑/环检测/失败传播
+```
+
+实测（2026-10-20，从 `build_dwd` 起跑）：
+
+| 任务 | 结果 | 耗时 |
+|:---|:---|---:|
+| build_dwd | ✅ SUCCESS | 44.0s |
+| build_dws | ✅ SUCCESS | 24.9s |
+| build_ads | ✅ SUCCESS | 21.7s |
+| quality_check | ✅ SUCCESS | 25.7s |
+| **合计** | | **116.2s** |
+
+### 两个坑，都是实际跑才发现的
+
+**① `--from` 一开始是错的。** 第一版把「不在本次范围内的上游」当成失败，
+导致 `--from build_dwd` 被 `fetch_ods` 挡住，四个任务全 `SKIPPED`。
+`--from` 的语义本来应该是"上游已经跑过了"，所以范围外的依赖要视为已完成，
+并且要在输出里**明示假设**（打印"以下上游视为已完成 -> fetch_ods"），不能悄悄放过。
+
+**② 工作目录必须由框架统一固定。** `metastore_db` 是按工作目录定位的，
+换个目录跑就找不到库。执行器给每个子进程固定 `cwd=项目根`，
+把这件事从「靠人记」变成「由框架保证」。
+
+---
+
 ## 进度
 
 - [x] 模型设计（7 张表，雪花结构）
@@ -229,7 +305,7 @@ DWS 不碰 ODS，ADS 不碰 DWD。数仓从 wiki 原始源码开始，不依赖�
 - [x] **DWS 汇总层 5 张表（只存 sum/cnt，不存平均）**
 - [x] **ADS 应用层 3 张表（只从 DWS 读，可存平均值与排名）**
 - [x] **数据质量校验脚本（45 项检查，全通过）**
-- [ ] 调度（DolphinScheduler 或 Airflow 串起来）
+- [x] 调度（自写轻量 DAG 执行器，含拓扑排序 / 环检测 / 失败传播 / 重试 / 运行留痕）
 
 **当前 16 张表，合计 7,983 行：**
 
@@ -468,7 +544,9 @@ WHERE o.star=6 AND m.bonus_atk IS NOT NULL;
   会在每个势力下各计一次。看"全库总人数"要用 `dim_operator`。
 - **没有做缓慢变化维（SCD）。** 当前数据是一次性快照，没有历史版本。
   ODS 里的 `etl_date` 已经为将来做 SCD 留了位置，但还没实现。
-- **没有接调度。** 现在是手工按顺序跑 5 个脚本，还没上 Airflow / DolphinScheduler。
+- **调度器是自写的，不是 Airflow。** 受限于 Windows 环境（Airflow 需要 WSL/Docker），
+  这里用自写的轻量 DAG 执行器覆盖了依赖编排、失败传播、重试、超时和运行留痕，
+  但**没有** Airflow 的 Web UI、跨机器 Worker、历史趋势和补数据（backfill）能力。
 - **只覆盖明日方舟一款游戏。** 换游戏需要重写抓取和解析。
 
 ---
